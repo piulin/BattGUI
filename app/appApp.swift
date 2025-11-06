@@ -39,6 +39,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var sbitem: NSStatusItem!
     var eventMonitor: Any?
     var highlightTimer: Timer?
+    private let popoverState = PopoverState()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusBarItem()
@@ -84,6 +85,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let swiftUIContentView = ContentView()
             // .frame(width: 300, height: 450, alignment: .top) // REMOVED
             .padding(0) // Add padding around the content
+            .environmentObject(popoverState)
 
         // Host the SwiftUI view within an NSHostingView
         // NSHostingView will intrinsically size based on swiftUIContentView
@@ -197,6 +199,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.setFrameTopLeftPoint(NSPoint(x: x, y: y))
         //window.makeKeyAndOrderFront(nil)
         window.orderFront(nil)
+        
+        // Mark popover as visible so views can start their timers/polling
+        popoverState.isVisible = true
     }
     
     func closePopover() {
@@ -208,6 +213,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         
         // 关闭窗口
         window.orderOut(nil)
+        
+        // Mark popover as hidden so views can pause timers/polling
+        popoverState.isVisible = false
     }
     
     // MARK: - Highlight Control

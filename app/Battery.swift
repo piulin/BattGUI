@@ -75,14 +75,20 @@ class BatteryInfoManager: ObservableObject {
     // captures their output, and then calls `parseBatteryInfo` on the main thread
     // to update the published properties.
     func updateBatteryInfo() {
+        // Core power metrics via SMC (keep calls minimal; derive where possible)
         loadwatt = Double(getRawSystemPower())
-        inputwatt = Double(getAdapterPower())
-        amperage = Double(getAdapterAmperage())
         voltage = Double(getAdapterVoltage())
+        inputwatt = Double(getAdapterPower())
+        // Derive adapter amperage from power/voltage to avoid extra SMC read
+        amperage = voltage > 0.01 ? (inputwatt / voltage) : 0.0
+        
+        // Battery metrics
         batteryVoltage = Double(getBatteryVoltage())
         batteryAmperage = Double(getBatteryAmperage())
-        batteryPower = Double(getBatteryPower())
-        isCharging = getChargingStatus().contains("Charging")
+        // Derive battery power and charging state from existing values
+        batteryPower = batteryVoltage * batteryAmperage
+        isCharging = batteryAmperage > 0.05
+        
         Task {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")

@@ -33,6 +33,7 @@ struct ContentView: View {
     @State private var iconwidth: CGFloat = 15
     @State private var debounceTask: Task<Void, Never>?
     private let socketPath = "/var/run/batt.sock" // Define socket path constant
+    @EnvironmentObject private var popoverState: PopoverState
 
     private func quitApp() {
         NSApplication.shared.terminate(nil)
@@ -242,7 +243,9 @@ struct ContentView: View {
         })
         // Restore .onReceive here
         .onReceive(timer) { _ in
-             batteryManager.updateBatteryInfo()
+            if popoverState.isVisible {
+                batteryManager.updateBatteryInfo()
+            }
         }
     }
 

@@ -39,6 +39,7 @@ struct PowerFlowView: View {
     let batteryPower: Double
     /// The power currently being consumed by the system in Watts.
     let systemLoad: Double
+    @EnvironmentObject private var popoverState: PopoverState
 
     // MARK: - Configuration Constants
     /// The size of the icons used (power plug, battery, laptop).
@@ -314,6 +315,7 @@ struct PowerFlowView: View {
         }
         // Replace the problematic onAppear block with this macOS-compatible version
         .onAppear {
+            guard popoverState.isVisible else { return }
             // Force width calculation on initial appearance
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 // Use the available space if not already set
@@ -398,6 +400,79 @@ struct PowerFlowView: View {
             // Clean up timer when view disappears
             animationTimer?.invalidate()
             animationTimer = nil
+        }
+        .onChange(of: popoverState.isVisible) { visible in
+            if !visible {
+                animationTimer?.invalidate()
+                animationTimer = nil
+            } else if animationTimer == nil {
+                // Recreate the animations by triggering onAppear logic
+                // Use a zero-delay async to avoid duplicating logic
+                DispatchQueue.main.async {
+                    // Call the same setup as onAppear
+                    // (Duplicated minimal subset to restart cycle)
+                    animateFlowWidth = 0
+                    animateFlowColor = Color.yellow.opacity(0.8)
+                    withAnimation(.easeOut(duration: 1.0)) {
+                        animateCharge = true
+                        animateLoad = false
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        withAnimation(.easeIn(duration: 1.0)) {
+                            animateCharge = false
+                        }
+                        withAnimation(.linear(duration: 1.0)) {
+                            animateFlowWidth = middleSectionWidth / 2
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                            withAnimation(.easeOut(duration: 0.5)) {
+                                animateFlowColor = Color.blue.opacity(0.8)
+                            }
+                            withAnimation(.linear(duration: 1.0)) {
+                                animateFlowWidth = middleSectionWidth
+                            }
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                            withAnimation(.easeOut(duration: 1.0)) {
+                                animateFlowColor = Color.clear
+                                animateLoad = true
+                            }
+                        }
+                    }
+                }
+                animationTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: true) { _ in
+                    DispatchQueue.main.async {
+                        animateFlowWidth = 0
+                        animateFlowColor = Color.yellow.opacity(0.8)
+                        withAnimation(.easeOut(duration: 1.0)) {
+                            animateCharge = true
+                            animateLoad = false
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                            withAnimation(.easeIn(duration: 1.0)) {
+                                animateCharge = false
+                            }
+                            withAnimation(.linear(duration: 1.0)) {
+                                animateFlowWidth = middleSectionWidth / 2
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                                withAnimation(.easeOut(duration: 0.5)) {
+                                    animateFlowColor = Color.blue.opacity(0.8)
+                                }
+                                withAnimation(.linear(duration: 1.0)) {
+                                    animateFlowWidth = middleSectionWidth
+                                }
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                                withAnimation(.easeOut(duration: 1.0)) {
+                                    animateFlowColor = Color.clear
+                                    animateLoad = true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         // Keep the existing onPreferenceChange
         .onPreferenceChange(WidthPreferenceKey.self) { width in
