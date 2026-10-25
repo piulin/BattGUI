@@ -5,8 +5,14 @@
   Created by Cline on [Current Date]. 
 */
 
-"limit.label" = "Limit:";
-"enable.power.button" = "Enable Power";
+"charging.allowed.label" = "Charging On";
+"charging.paused.label" = "Charging Paused";
+"charging.hold.help" = "Holding the charge at %d%%. The Mac runs on the power adapter.";
+"charging.pause.prompt" = "BattGUI wants to pause battery charging.";
+"charging.resume.prompt" = "BattGUI wants to resume battery charging.";
+"charging.state.unreadable" = "Couldn't read the battery level or the current charge limit.";
+"charging.change.failed" = "Couldn't change the charge limit: %@";
+"charging.limit.not.applied" = "macOS didn't apply the new charge limit.";
 "design.capacity.label" = "Design Capacity";
 "serial.number.label" = "Serial Number";
 "max.capacity.label" = "Max Capacity";

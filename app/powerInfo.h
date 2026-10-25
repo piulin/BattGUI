@@ -16,10 +16,15 @@ float getBatteryVoltage(void);
 float getBatteryAmperage(void);
 float getBatteryPower(void);
 NSString *_Nonnull getChargingStatus(void);
+float getBatteryTemperature(void);
 
-// Class for interacting with the batt daemon socket
-// Function for interacting with the batt daemon socket
-// Sends a command value to the specified Unix domain socket path.
-// Returns the response string on success, nil on failure.
-// Populates the error pointer if an error occurs and the pointer is not NULL.
-NSString *_Nullable sendCommandToUnixSocket(NSInteger value, const char *_Nonnull socketPath, NSError *_Nullable *_Nullable error);
+// Battery charge in percent as shown by macOS, read live from the SMC. -1 on failure.
+int getBatteryUIPercent(void);
+
+// macOS Charge Limit (System Settings > Battery), read without privileges. -1 on failure.
+int getChargeLimit(void);
+int isChargeLimitEnabled(void);
+
+// Change macOS Charge Limit without privileges. Only 80-100% is accepted.
+BOOL setChargeLimit(int limit);
+BOOL setChargeLimitEnabled(BOOL enabled);

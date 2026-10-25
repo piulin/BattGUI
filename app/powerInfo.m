@@ -36,6 +36,7 @@
 #import <Foundation/Foundation.h>
 #import <IOKit/IOKitLib.h>
 #import <unistd.h>
+#import <dlfcn.h>
 
 // Structure to communicate with the SMC
 typedef struct {
@@ -332,31 +333,58 @@ BatteryInfo getBatteryInfo(void) {
     return info;
 } // <-- ADDED MISSING CLOSING BRACE FOR getBatteryInfo
 
-// Function to get battery temperature (tries multiple keys)
-float getBatteryTemperature(void) {
-    float temperature = -999.0f; // Indicate failure
+// Helper function to read a 4-byte float value (flt) from SMC
+BOOL getSMCFloatValue(uint32_t key, float* outValue) {
     BOOL success = NO;
-    
-    // Define potential keys
-    uint32_t keysToTry[] = {
+    io_service_t smc = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"));
+
+    if (smc) {
+        io_connect_t conn = IO_OBJECT_NULL;
+        IOReturn result = IOServiceOpen(smc, mach_task_self(), 1, &conn);
+
+        if (result == kIOReturnSuccess && conn != IO_OBJECT_NULL) {
+            AppleSMCData_Float inStruct, outStruct;
+            size_t outStructSize = sizeof(AppleSMCData_Float);
+
+            bzero(&inStruct, sizeof(AppleSMCData_Float));
+            bzero(&outStruct, sizeof(AppleSMCData_Float));
+
+            inStruct.command = 5; // read command
+            inStruct.size = 4;
+            inStruct.key = key;
+
+            result = IOConnectCallStructMethod(conn, 2, &inStruct, sizeof(AppleSMCData_Float), &outStruct, &outStructSize);
+            IOServiceClose(conn);
+
+            if (result == kIOReturnSuccess) {
+                *outValue = outStruct.value;
+                success = YES;
+            }
+        }
+        IOObjectRelease(smc);
+    }
+    return success;
+}
+
+// Battery temperature in °C: the average of the battery pack sensors (flt on
+// Apple Silicon). Returns -999 if none could be read.
+float getBatteryTemperature(void) {
+    uint32_t keys[] = {
         ('T' << 24) + ('B' << 16) + ('0' << 8) + 'T', // TB0T
         ('T' << 24) + ('B' << 16) + ('1' << 8) + 'T', // TB1T
         ('T' << 24) + ('B' << 16) + ('2' << 8) + 'T', // TB2T
-        ('T' << 24) + ('B' << 16) + ('3' << 8) + 'T', // TB3T
-        ('T' << 24) + ('C' << 16) + ('0' << 8) + 'B'  // TC0B (Another possible battery temp key)
     };
-    int numKeys = sizeof(keysToTry) / sizeof(keysToTry[0]);
-
-    for (int i = 0; i < numKeys; ++i) {
-        success = getSMCSignedFixedPoint78Value(keysToTry[i], &temperature);
-        // If the SMC call itself succeeded, return the value immediately.
-        if (success) {
-            return temperature; // Found a valid reading
+    float sum = 0;
+    int count = 0;
+    for (int i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+        float value = 0;
+        // Missing sensors read as 0; skip anything implausible.
+        if (getSMCFloatValue(keys[i], &value) && value > -40 && value < 120 && value != 0) {
+            sum += value;
+            count++;
         }
     }
-
-    // If loop finishes without returning, all SMC calls failed for these keys.
-    return -999.0f; // Return failure indicator
+    return count > 0 ? sum / count : -999.0f;
 }
 
 // Function to get battery cycle count
@@ -451,142 +479,73 @@ NSString* getChargingStatus(void) {
     return myString;
 }
 
-#import "powerInfo.h"
-#import <sys/socket.h>
-#import <sys/un.h>
-#import <errno.h> // For errno
-
-// Define an error domain for our custom errors
-NSString * const PowerInfoErrorDomain = @"com.yourcompany.BattGUI.PowerInfoErrorDomain"; // Replace with your actual domain
-
-// Implementation for sending command to Unix domain socket
-NSString * _Nullable sendCommandToUnixSocket(NSInteger value, const char * _Nonnull socketPath, NSError * _Nullable * _Nullable error) {
-    // Declare all variables at the top to avoid goto issues
-    int sockfd = -1;
-    struct sockaddr_un addr;
-    char buffer[1024];
-    ssize_t bytesSent = 0; // Initialize to avoid potential uninitialized reads if goto happens early
-    ssize_t bytesRead = 0;
-    NSString *responseString = nil;
-    NSError *localError = nil;
-    NSString *valueString = nil;
-    NSString *requestBody = nil;
-    NSString *requestString = nil;
-    const char *requestBytes = NULL;
-    size_t requestLength = 0;
-    NSMutableData *responseData = nil; // Initialize later
-
-    // 1. Create Socket
-    sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (sockfd == -1) {
-        localError = [NSError errorWithDomain:PowerInfoErrorDomain
-                                         code:errno // Use POSIX error code
-                                     userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to create socket: %s", strerror(errno)]}];
-        perror("socket error");
-        goto cleanup; // Use goto for centralized cleanup
+// Battery charge as shown by macOS (BUIC). Read live from the SMC: ioreg's
+// CurrentCapacity can lag behind by a minute or more while charging.
+int getBatteryUIPercent(void) {
+    int8_t percent = -1;
+    if (!getSMCSInt8Value(('B' << 24) + ('U' << 16) + ('I' << 8) + 'C', &percent)) {
+        return -1;
     }
+    return percent;
+}
 
-    // 2. Set up Address Structure
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    if (strlen(socketPath) >= sizeof(addr.sun_path)) {
-         localError = [NSError errorWithDomain:PowerInfoErrorDomain
-                                          code:ENAMETOOLONG
-                                      userInfo:@{NSLocalizedDescriptionKey: @"Socket path is too long."}];
-        goto cleanup;
-    }
-    strncpy(addr.sun_path, socketPath, sizeof(addr.sun_path) - 1);
+// --- macOS Charge Limit (read-only, via the private PowerUI framework) ---
 
-    // 3. Connect to Socket
-    if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
-        localError = [NSError errorWithDomain:PowerInfoErrorDomain
-                                         code:errno
-                                     userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to connect to socket '%s': %s", socketPath, strerror(errno)]}];
-        perror("connect error");
-        goto cleanup;
-    }
+@interface PowerUISmartChargeClient : NSObject
+- (instancetype)initWithClientName:(NSString *)clientName;
+- (unsigned char)getMCLLimitWithError:(NSError **)error;
+- (unsigned long long)isMCLCurrentlyEnabled:(NSError **)error;
+- (BOOL)setMCLLimit:(unsigned char)limit error:(NSError **)error;
+- (BOOL)enableMCL:(NSError **)error;
+- (BOOL)disableMCL:(NSError **)error;
+@end
 
-    // 4. Construct HTTP PUT Request
-    valueString = [NSString stringWithFormat:@"%ld", (long)value]; // Assign here
-    requestBody = valueString; // Assign here
-    requestString = [NSString stringWithFormat: // Assign here
-                               @"PUT /limit HTTP/1.1\r\n"
-                               @"Host: localhost\r\n"
-                               @"Content-Type: text/plain\r\n" // Assuming plain text is okay
-                               @"Content-Length: %lu\r\n"
-                               @"Connection: close\r\n" // Close connection after response
-                               @"\r\n"
-                               @"%@",
-                               (unsigned long)[requestBody length], requestBody]; // Corrected argument order
-
-    requestBytes = [requestString UTF8String]; // Assign here
-    requestLength = strlen(requestBytes); // Assign here
-
-    // 5. Send Request
-    bytesSent = write(sockfd, requestBytes, requestLength);
-    if (bytesSent == -1) {
-        localError = [NSError errorWithDomain:PowerInfoErrorDomain
-                                         code:errno
-                                      userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to write to socket: %s", strerror(errno)]}];
-        perror("write error");
-        goto cleanup;
-    }
-    if (bytesSent < requestLength) {
-        localError = [NSError errorWithDomain:PowerInfoErrorDomain
-                                         code:EIO // Generic I/O error
-                                      userInfo:@{NSLocalizedDescriptionKey: @"Partial write to socket."}];
-        fprintf(stderr, "Partial write to socket\n");
-        goto cleanup;
-    }
-
-    // 6. Read Response
-    responseData = [NSMutableData data]; // Initialize here
-    while ((bytesRead = read(sockfd, buffer, sizeof(buffer) - 1)) > 0) {
-        // buffer[bytesRead] = '\0'; // Null-termination not needed for appending data
-        [responseData appendBytes:buffer length:bytesRead];
-    }
-
-    if (bytesRead == -1) {
-        // Read error might occur if server closes connection immediately. Check errno.
-        // EAGAIN/EWOULDBLOCK are not expected for blocking sockets.
-        // ECONNRESET might be okay if data was received before reset.
-        if (errno != ECONNRESET || [responseData length] == 0) {
-             localError = [NSError errorWithDomain:PowerInfoErrorDomain
-                                              code:errno
-                                          userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to read from socket: %s", strerror(errno)]}];
-            perror("read error");
-            goto cleanup;
+static PowerUISmartChargeClient *smartChargeClient(void) {
+    static PowerUISmartChargeClient *client = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        dlopen("/System/Library/PrivateFrameworks/PowerUI.framework/PowerUI", RTLD_NOW);
+        Class cls = NSClassFromString(@"PowerUISmartChargeClient");
+        if ([cls instancesRespondToSelector:@selector(getMCLLimitWithError:)] &&
+            [cls instancesRespondToSelector:@selector(isMCLCurrentlyEnabled:)] &&
+            [cls instancesRespondToSelector:@selector(setMCLLimit:error:)] &&
+            [cls instancesRespondToSelector:@selector(enableMCL:)] &&
+            [cls instancesRespondToSelector:@selector(disableMCL:)]) {
+            client = [[cls alloc] initWithClientName:@"BattGUI"];
         }
-        // If ECONNRESET and we got data, proceed.
-        perror("read warning (ECONNRESET after receiving data)");
-    }
+    });
+    return client;
+}
 
-    // Convert response data to string
-    if ([responseData length] > 0) {
-        responseString = [[NSString alloc] initWithData:responseData encoding:NSUTF8StringEncoding];
-        if (!responseString) {
-            localError = [NSError errorWithDomain:PowerInfoErrorDomain
-                                             code:NSPropertyListReadCorruptError // Or a more specific encoding error code
-                                         userInfo:@{NSLocalizedDescriptionKey: @"Failed to decode response data as UTF-8."}];
-             fprintf(stderr, "Failed to decode response as UTF-8\n");
-             // Fall through to cleanup, responseString is already nil
-        }
-    } else {
-        // No data read, assume success with empty response if no other error occurred.
-        responseString = @"";
-    }
+int getChargeLimit(void) {
+    PowerUISmartChargeClient *client = smartChargeClient();
+    if (!client) return -1;
+    NSError *error = nil;
+    unsigned char limit = [client getMCLLimitWithError:&error];
+    return error ? -1 : limit;
+}
 
-cleanup:
-    // 7. Close Socket if it was opened
-    if (sockfd != -1) {
-        close(sockfd);
-    }
+int isChargeLimitEnabled(void) {
+    PowerUISmartChargeClient *client = smartChargeClient();
+    if (!client) return -1;
+    NSError *error = nil;
+    unsigned long long enabled = [client isMCLCurrentlyEnabled:&error];
+    return error ? -1 : (enabled ? 1 : 0);
+}
 
-    // 8. Assign error if pointer provided and localError exists
-    if (error && localError) {
-        *error = localError;
-    }
+// The setters below need no privileges and PowerUIAgent applies them at once,
+// but only accept the values System Settings offers (80-100%).
 
-    // Return nil if an error occurred, otherwise the response string
-    return (localError == nil) ? responseString : nil;
+BOOL setChargeLimit(int limit) {
+    PowerUISmartChargeClient *client = smartChargeClient();
+    if (!client || limit < 0 || limit > 100) return NO;
+    return [client setMCLLimit:(unsigned char)limit error:nil];
+}
+
+// Note: enabling restores the limit last set through System Settings or
+// setChargeLimit(), replacing a lower limit written to the preferences directly.
+BOOL setChargeLimitEnabled(BOOL enabled) {
+    PowerUISmartChargeClient *client = smartChargeClient();
+    if (!client) return NO;
+    return enabled ? [client enableMCL:nil] : [client disableMCL:nil];
 }

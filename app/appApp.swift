@@ -25,6 +25,7 @@
 import SwiftUI
 import AppKit
 import Cocoa
+import IOKit.ps
 
 @main
 struct appApp: App {
@@ -40,9 +41,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var eventMonitor: Any?
     var highlightTimer: Timer?
     private let popoverState = PopoverState()
+    private var hostingView: NSView!
+    private var powerSourceObserver: CFRunLoopSource?
+    private var powerState: PowerState?
+    // Matches the 14pt section corners inside the 10pt content padding.
+    private static let panelCornerRadius: CGFloat = 24
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusBarItem()
+        observePowerSource()
         setupPopoverWindow()
         setupEventMonitor() // Keep existing call
     }
@@ -53,8 +60,64 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         sbitem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         guard let button = sbitem.button else { return }
 
+        button.target = self
+        button.action = #selector(sbiClick)
+    }
+
+    // MARK: - Status Icon
+
+    private enum PowerState {
+        case battery, charging, pluggedIn
+
+        var symbolName: String {
+            switch self {
+            case .battery: return "minus.plus.and.fluid.batteryblock"
+            case .charging: return "bolt.batteryblock"
+            case .pluggedIn: return "powerplug.portrait"
+            }
+        }
+
+        var accessibilityDescription: String {
+            switch self {
+            case .battery: return "On Battery"
+            case .charging: return "Charging"
+            case .pluggedIn: return "Plugged In, Not Charging"
+            }
+        }
+
+        static func current() -> PowerState {
+            let info = IOPSCopyPowerSourcesInfo().takeRetainedValue()
+            let sources = IOPSCopyPowerSourcesList(info).takeRetainedValue() as [CFTypeRef]
+            for source in sources {
+                guard let description = IOPSGetPowerSourceDescription(info, source)?.takeUnretainedValue() as? [String: Any],
+                      description[kIOPSTypeKey] as? String == kIOPSInternalBatteryType else { continue }
+                guard description[kIOPSPowerSourceStateKey] as? String == kIOPSACPowerValue else { return .battery }
+                return description[kIOPSIsChargingKey] as? Bool == true ? .charging : .pluggedIn
+            }
+            return .battery
+        }
+    }
+
+    // Updates the status icon whenever macOS reports a power source change
+    // (plugging in, charging starting or stopping). Event driven, no polling.
+    private func observePowerSource() {
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        guard let source = IOPSNotificationCreateRunLoopSource({ context in
+            guard let context else { return }
+            Unmanaged<AppDelegate>.fromOpaque(context).takeUnretainedValue().updateStatusIcon()
+        }, context)?.takeRetainedValue() else { return }
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
+        powerSourceObserver = source
+        updateStatusIcon()
+    }
+
+    private func updateStatusIcon() {
+        let state = PowerState.current()
+        guard state != powerState, let button = sbitem.button else { return }
+        powerState = state
+
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-        if let originalImage = NSImage(systemSymbolName: "minus.plus.and.fluid.batteryblock", accessibilityDescription: "Battery Limit")?.withSymbolConfiguration(config) {
+        if let originalImage = NSImage(systemSymbolName: state.symbolName, accessibilityDescription: state.accessibilityDescription)?.withSymbolConfiguration(config) {
             // Create a new image with padding for visual centering in the status bar.
             let paddedImage = NSImage(size: NSSize(width: originalImage.size.width, height: originalImage.size.height + 4))
             paddedImage.lockFocus()
@@ -73,8 +136,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
             button.image = paddedImage
         }
-        button.target = self
-        button.action = #selector(sbiClick)
     }
 
     private func setupPopoverWindow() {
@@ -92,40 +153,51 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let hostingView = NSHostingView(rootView: swiftUIContentView)
         // hostingView.frame = NSRect(x: 0, y: 0, width: 300, height: 450) // REMOVED
         hostingView.autoresizingMask = [.width, .height] // Keep autoresizing
-        // Restore layer setup for hostingView (though clipping is handled by backgroundView)
-        hostingView.wantsLayer = true
-        hostingView.layer?.cornerRadius = 16
-        hostingView.layer?.cornerCurve = .continuous
-        hostingView.layer?.masksToBounds = true // This might be redundant if backgroundView clips
-
+        self.hostingView = hostingView
         let intrinsicSize = hostingView.fittingSize
 
-        // Create the visual effect view for the blurred background
-        let visualEffectView = NSVisualEffectView()
-        visualEffectView.material = .hudWindow
-        visualEffectView.blendingMode = .behindWindow
-        visualEffectView.state = .active
-        visualEffectView.frame = hostingView.bounds
-        visualEffectView.autoresizingMask = [.width, .height]
-        visualEffectView.wantsLayer = true
-        visualEffectView.layer?.cornerRadius = 16
-        visualEffectView.layer?.cornerCurve = .continuous
-        // visualEffectView.layer?.masksToBounds = true // Clipping handled by backgroundView
+        let panelContentView: NSView
+        if #available(macOS 26.0, *) {
+            // Liquid Glass background
+            let glassView = NSGlassEffectView()
+            glassView.cornerRadius = Self.panelCornerRadius
+            glassView.contentView = hostingView
+            panelContentView = glassView
+        } else {
+            // Restore layer setup for hostingView (though clipping is handled by backgroundView)
+            hostingView.wantsLayer = true
+            hostingView.layer?.cornerRadius = 16
+            hostingView.layer?.cornerCurve = .continuous
+            hostingView.layer?.masksToBounds = true // This might be redundant if backgroundView clips
 
-        // Add the hosting view as a subview of the visual effect view
-        visualEffectView.addSubview(hostingView)
+            // Create the visual effect view for the blurred background
+            let visualEffectView = NSVisualEffectView()
+            visualEffectView.material = .hudWindow
+            visualEffectView.blendingMode = .behindWindow
+            visualEffectView.state = .active
+            visualEffectView.frame = hostingView.bounds
+            visualEffectView.autoresizingMask = [.width, .height]
+            visualEffectView.wantsLayer = true
+            visualEffectView.layer?.cornerRadius = 16
+            visualEffectView.layer?.cornerCurve = .continuous
+            // visualEffectView.layer?.masksToBounds = true // Clipping handled by backgroundView
 
-        // Re-add intermediate background view for clipping
-        let backgroundView = NSView()
-        backgroundView.wantsLayer = true
-        backgroundView.layer?.backgroundColor = NSColor.clear.cgColor
-        backgroundView.layer?.cornerRadius = 16
-        backgroundView.layer?.cornerCurve = .continuous
-        backgroundView.layer?.borderWidth = 0.5
-        backgroundView.layer?.borderColor = NSColor.separatorColor.cgColor
-        backgroundView.layer?.masksToBounds = true // Clip subviews (visualEffectView)
+            // Add the hosting view as a subview of the visual effect view
+            visualEffectView.addSubview(hostingView)
 
-        backgroundView.addSubview(visualEffectView)
+            // Re-add intermediate background view for clipping
+            let backgroundView = NSView()
+            backgroundView.wantsLayer = true
+            backgroundView.layer?.backgroundColor = NSColor.clear.cgColor
+            backgroundView.layer?.cornerRadius = 16
+            backgroundView.layer?.cornerCurve = .continuous
+            backgroundView.layer?.borderWidth = 0.5
+            backgroundView.layer?.borderColor = NSColor.separatorColor.cgColor
+            backgroundView.layer?.masksToBounds = true // Clip subviews (visualEffectView)
+
+            backgroundView.addSubview(visualEffectView)
+            panelContentView = backgroundView
+        }
 
         // Create the NSPanel (popover window)
         // Initialize with zero rect, it will resize to fit contentView
@@ -141,10 +213,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.backgroundColor = .clear // Transparent background
         panel.level = .floating // Keep panel above other windows
         panel.isReleasedWhenClosed = false // Keep panel instance in memory
-        // panel.hasShadow = true // Optional: Add a system shadow if desired
+        if #available(macOS 26.0, *) {
+            panel.hasShadow = true
+        }
 
         // Set the intermediate background view as the panel's content view
-        panel.contentView = backgroundView // Use backgroundView for clipping
+        panel.contentView = panelContentView
 
         // Explicitly set the panel's content size based on the SwiftUI view's needs
         panel.setContentSize(intrinsicSize)
@@ -232,10 +306,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // the button to lose its highlight state otherwise.
         highlightTimer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
             self?.sbitem.button?.highlight(true)
-            let cs = self?.window.contentView?.subviews[0].subviews[0].fittingSize
-            let ws = self?.window.frame.size
-            if cs != ws {
-                self?.window.setContentSize(cs!)
+            if let self, self.hostingView.fittingSize != self.window.frame.size {
+                self.window.setContentSize(self.hostingView.fittingSize)
             }
         }
     }
@@ -257,6 +329,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // 清理资源
         stopHighlightTimer()
+        if let powerSourceObserver {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), powerSourceObserver, .defaultMode)
+        }
         if let monitor = eventMonitor {
             NSEvent.removeMonitor(monitor)
         }

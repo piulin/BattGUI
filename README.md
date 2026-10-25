@@ -51,12 +51,26 @@ graph TD
 - Battery health monitoring (cycles, capacity, temperature)
 - Adapter power input tracking
 - System load/power consumption correlation
+- Pause charging while plugged in: the Mac keeps running on the adapter, but the battery is not charged
+
+### Pausing Charging
+The toggle at the top pauses battery charging without unplugging. Since macOS 27 the SMC charging keys used by
+[batt](https://github.com/charlie0129/batt) are no longer available, so BattGUI uses macOS's own Charge Limit instead:
+pausing sets the limit just above the current charge, and resuming restores your previous limit immediately, without
+a password. The limit is always kept above the live charge, because macOS runs the Mac from the battery while the
+charge is above the limit.
+
+System Settings only offers limits of 80–100%; lower limits are written to the underlying preference as root, so
+pausing below 79% asks for an administrator password. To use Touch ID instead, enable it for `sudo`:
+```bash
+sed -e 's/^#auth/auth/' /etc/pam.d/sudo_local.template | sudo tee /etc/pam.d/sudo_local
+```
 
 ## Requirements
 
 - macOS 13 Ventura or newer
 - Xcode 15+
-- Administrative privileges for SMC access
+- Administrator password (or Touch ID for `sudo`) to pause charging
 
 ## Installation
 
@@ -72,11 +86,6 @@ graph TD
 git clone https://github.com/clzoc/BattGUI.git
 cd power-suite
 xcodebuild -workspace app.xcodeproj/project.xcworkspace -scheme app
-```
-
-2. Install required components:
-```bash
-sudo batt install --allow-non-root-access
 ```
 
 ### Alternative Installation
@@ -108,31 +117,6 @@ open app/build/Release/app.app
   - Enhanced real-time measurement visualization
   - Historical data trending
   - Customizable power profiles
-
-- **GUI Charge Limit Adjustment Permission Denied**: When attempting to adjust battery charge limit through the GUI, users encounter permission errors depending on installation method.
-
-  ## Affected Components
-  - `powerInfo.m` (Objective-C)
-  - Unix domain socket: `/var/run/batt.sock`
-  - GUI slider control
-
-  ## Symptoms
-  | Installation Method | Behavior | Command |
-  |---------------------|----------|---------|
-  | With `--allow-non-root-access` | ✅ Works correctly | `sudo batt install --allow-non-root-access` |
-  | Default installation | ❌ "Permission denied" error | `sudo batt install` |
-
-  ## Technical Details
-  ### Root Cause
-  The Unix domain socket (`/var/run/batt.sock`) implements strict permission controls:
-  - Default mode: 600 (root-only)
-  - With flag: 666 (world-readable/writable)
-
-  ### Error Reproduction
-  1. Install without special flags
-  2. Launch GUI application
-  3. Attempt to move charge limit slider
-  4. Observe error in system logs:
 
 ## Contributing
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.

@@ -82,10 +82,10 @@ struct PowerFlowView: View {
                     ZStack {
                         // corners: [TL, TR, BR, BL]
                         generateSquircle(width: iconSize + 20, height: batteryPower > 0 ? flowHeight * 1.5 : flowHeight, radius: cornerRadius, corners: [true, false, false, true])
-                            .fill(.ultraThickMaterial)
+                            .fill(.fill.tertiary)
                         Image(systemName: "powerplug.portrait")
                             .font(.system(size: iconSize))
-                            .foregroundColor(animateCharge ? Color.yellow : Color.black)
+                            .foregroundColor(animateCharge ? Color.yellow : Color.primary)
                             .offset(x: 1, y: 0)
                     }
                     .frame(width: iconSize + 20, height: batteryPower > 0 ? flowHeight * 1.5 : flowHeight) // Apply frame to the ZStack, conditional height
@@ -95,10 +95,10 @@ struct PowerFlowView: View {
                     ZStack {
                         // corners: [TL, TR, BR, BL]
                         generateSquircle(width: iconSize + 20, height: flowHeight, radius: cornerRadius, corners: [true, false, false, true])
-                            .fill(.ultraThickMaterial)
+                            .fill(.fill.tertiary)
                         Image(systemName: batteryPower > 0 ? "battery.100.bolt" : (batteryPower < 0 ? "battery.75" : "battery.100")) // Simple icon logic
                             .font(.system(size: iconSize))
-                            .foregroundColor(animateCharge ? Color.orange : Color.black)
+                            .foregroundColor(animateCharge ? Color.orange : Color.primary)
                             .offset(x: 1, y: 0)
                     }
                     .frame(width: iconSize + 20, height: flowHeight) // Apply frame to the ZStack
@@ -112,7 +112,7 @@ struct PowerFlowView: View {
                         ZStack {
                             ZStack(alignment: .leading, content: {
                                 Rectangle()
-                                    .fill(.ultraThickMaterial)
+                                    .fill(.fill.tertiary)
                                     .frame(height: flowHeight)
                                     .background(GeometryReader { geometry in
                                         Color.clear.preference(key: WidthPreferenceKey.self, value: geometry.size.width)
@@ -129,14 +129,14 @@ struct PowerFlowView: View {
                                     .offset(x: 0)
                                     .frame(width: animateFlowWidth, height: flowHeight)
                             })
-                            Text(String(format: "%.2f", inputPower) + " W").font(.system(size: 13)).frame(alignment: .trailing)
+                            Text(String(format: "%.2f", inputPower) + " W").font(.system(size: 13).monospacedDigit()).frame(alignment: .trailing)
                         }
                     } else if batteryPower > 0 {
                         VStack(alignment: .center, spacing: 0) {
                             ZStack {
                                 ZStack(alignment: .leading, content: {
                                     Rectangle()
-                                        .fill(.ultraThickMaterial)
+                                        .fill(.fill.tertiary)
                                         .frame(width: middleSectionWidth, height: flowHeight * 1.5)
                                         .clipShape(
                                             flowShape(width: middleSectionWidth, height: flowHeight * 1.5,
@@ -158,14 +158,14 @@ struct PowerFlowView: View {
                                                       startLength: flowHeight * 0.75, endLength: flowHeight, direction: 1)
                                         )
                                 })
-                                Text(String(format: "%.2f", batteryPower) + " W").font(.system(size: 13)).frame(alignment: .trailing)
+                                Text(String(format: "%.2f", batteryPower) + " W").font(.system(size: 13).monospacedDigit()).frame(alignment: .trailing)
 
                             }
                             
                             ZStack {
                                 ZStack(alignment: .leading, content: {
                                     Rectangle()
-                                        .fill(.ultraThickMaterial)
+                                        .fill(.fill.tertiary)
                                         .frame(width: middleSectionWidth, height: flowHeight * 1.5)
                                         .clipShape(
                                             flowShape(width: middleSectionWidth, height: flowHeight * 1.5,
@@ -187,7 +187,7 @@ struct PowerFlowView: View {
                                                       startLength: flowHeight * 0.75, endLength: flowHeight, direction: 0)
                                         )
                                 })
-                                Text(String(format: "%.2f", systemLoad) + " W").font(.system(size: 13)).frame(alignment: .trailing)
+                                Text(String(format: "%.2f", systemLoad) + " W").font(.system(size: 13).monospacedDigit()).frame(alignment: .trailing)
                             }
                         }
 //                        .background(GeometryReader { geometry in
@@ -199,7 +199,7 @@ struct PowerFlowView: View {
                             ZStack {
                                 ZStack(alignment: .leading, content: {
                                     Rectangle()
-                                        .fill(.ultraThickMaterial)
+                                        .fill(.fill.tertiary)
                                         .frame(width: middleSectionWidth, height: flowHeight * 1.5)
                                         .clipShape(
                                             flowShape(width: middleSectionWidth, height: flowHeight * 1.5,
@@ -221,13 +221,13 @@ struct PowerFlowView: View {
                                                       startLength: flowHeight, endLength: flowHeight * 0.75, direction: 0)
                                         )
                                 })
-                                Text(String(format: "%.2f", inputPower) + " W").font(.system(size: 13)).frame(alignment: .trailing)
+                                Text(String(format: "%.2f", inputPower) + " W").font(.system(size: 13).monospacedDigit()).frame(alignment: .trailing)
                             }
                             
                             ZStack {
                                 ZStack(alignment: .leading, content: {
                                     Rectangle()
-                                        .fill(.ultraThickMaterial)
+                                        .fill(.fill.tertiary)
                                         .frame(width: middleSectionWidth, height: flowHeight * 1.5)
                                         .clipShape(
                                             flowShape(width: middleSectionWidth, height: flowHeight * 1.5,
@@ -249,7 +249,7 @@ struct PowerFlowView: View {
                                                       startLength: flowHeight, endLength: flowHeight * 0.75, direction: 1)
                                         )
                                 })
-                                Text(String(format: "%.2f", batteryPower * -1) + " W").font(.system(size: 13)).frame(alignment: .trailing)
+                                Text(String(format: "%.2f", batteryPower * -1) + " W").font(.system(size: 13).monospacedDigit()).frame(alignment: .trailing)
                             }
                         }
 //                        .background(GeometryReader { geometry in
@@ -260,7 +260,7 @@ struct PowerFlowView: View {
                     ZStack {
                         ZStack(alignment: .leading, content: {
                             Rectangle()
-                                .fill(.ultraThickMaterial)
+                                .fill(.fill.tertiary)
                                 .frame(height: flowHeight)
                                 .background(GeometryReader { geometry in
                                     Color.clear.preference(key: WidthPreferenceKey.self, value: geometry.size.width)
@@ -277,7 +277,7 @@ struct PowerFlowView: View {
                                 .offset(x: 0)
                                 .frame(width: animateFlowWidth, height: flowHeight)
                         })
-                        Text(String(format: "%.2f", batteryPower * -1) + " W").font(.system(size: 13)).frame(alignment: .trailing)
+                        Text(String(format: "%.2f", batteryPower * -1) + " W").font(.system(size: 13).monospacedDigit()).frame(alignment: .trailing)
                     }
                 }
             }
@@ -288,11 +288,11 @@ struct PowerFlowView: View {
                     ZStack {
                         // corners: [TL, TR, BR, BL]
                         generateSquircle(width: iconSize + 20, height: flowHeight, radius: cornerRadius, corners: [false, true, true, false])
-                            .fill(.ultraThickMaterial)
+                            .fill(.fill.tertiary)
                         
                         Image(systemName: batteryPower > 0 ? "battery.100.bolt" : (batteryPower < 0 ? "battery.75" : "battery.100")) // Simple icon logic
                             .font(.system(size: iconSize))
-                            .foregroundColor(animateLoad ? Color.green : Color.black)
+                            .foregroundColor(animateLoad ? Color.green : Color.primary)
                             .offset(x: -1, y: 0)
                     }
                     .frame(width: iconSize + 20, height: flowHeight) // Apply frame to the ZStack
@@ -302,11 +302,11 @@ struct PowerFlowView: View {
                 ZStack {
                     // corners: [TL, TR, BR, BL]
                     generateSquircle(width: iconSize + 20, height: (batteryPower < 0 && inputPower > 0.01) ? flowHeight * 1.5 : flowHeight, radius: cornerRadius, corners: [false, true, true, false])
-                        .fill(.ultraThickMaterial)
+                        .fill(.fill.tertiary)
                     
                     Image(systemName: "laptopcomputer")
                         .font(.system(size: iconSize))
-                        .foregroundColor(animateLoad ? Color.blue : Color.black)
+                        .foregroundColor(animateLoad ? Color.blue : Color.primary)
                         .offset(x: -1, y: 0)
                 }
                 .frame(width: iconSize + 20, height: (batteryPower < 0 && inputPower > 0.01) ? flowHeight * 1.5 : flowHeight) // Apply frame to the ZStack

@@ -5,8 +5,14 @@
   Created by Cline on [Current Date]. 
 */
 
-"limit.label" = "限制：";
-"enable.power.button" = "启用电源";
+"charging.allowed.label" = "充电已开启";
+"charging.paused.label" = "充电已暂停";
+"charging.hold.help" = "电量保持在 %d%%，Mac 由电源适配器供电。";
+"charging.pause.prompt" = "BattGUI 想要暂停电池充电。";
+"charging.resume.prompt" = "BattGUI 想要恢复电池充电。";
+"charging.state.unreadable" = "无法读取电池电量或当前充电上限。";
+"charging.change.failed" = "无法更改充电上限：%@";
+"charging.limit.not.applied" = "macOS 未应用新的充电上限。";
 "design.capacity.label" = "设计容量";
 "serial.number.label" = "序列号";
 "max.capacity.label" = "最大容量";

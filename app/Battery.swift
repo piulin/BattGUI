@@ -22,13 +22,14 @@
 //
 
 import Foundation
+import IOKit
 import SwiftUI
 
 // Manages fetching and parsing battery and power information from system commands.
 //
 // This class acts as an `ObservableObject`, providing published properties
 // that SwiftUI views can observe to display real-time battery and power metrics.
-// It uses `ioreg` and the bundled `power_info` command-line tool to gather data.
+// It reads the SMC and the AppleSmartBattery IORegistry entry directly.
 class BatteryInfoManager: ObservableObject {
     // The current maximum capacity of the battery in mAh (AppleRawMaxCapacity).
     @Published var batteryCapacity: Int = 0
@@ -69,11 +70,8 @@ class BatteryInfoManager: ObservableObject {
         updateBatteryInfo()
     }
     
-    // Asynchronously fetches and updates all battery information properties.
-    //
-    // This function runs the `power_info` tool and `ioreg` command,
-    // captures their output, and then calls `parseBatteryInfo` on the main thread
-    // to update the published properties.
+    // Fetches and updates all battery information properties from the SMC
+    // and the AppleSmartBattery registry entry.
     func updateBatteryInfo() {
         // Core power metrics via SMC (keep calls minimal; derive where possible)
         loadwatt = Double(getRawSystemPower())
@@ -89,73 +87,41 @@ class BatteryInfoManager: ObservableObject {
         batteryPower = batteryVoltage * batteryAmperage
         isCharging = batteryAmperage > 0.05
         
-        Task {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-c", "ioreg -r -c AppleSmartBattery | grep -E 'DesignCapacity|CycleCount|Serial|Temperature|CurrentCapacity|AppleRawMaxCapacity' "]
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            
-            do {
-                try process.run()
-                process.waitUntilExit()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
+        // Battery details from the AppleSmartBattery registry entry (read
+        // directly, no ioreg process).
+        guard let battery = BatteryRegistry() else { return }
+        defer { battery.release() }
+        let data = battery.dictionary("BatteryData")
+        designCapacity = data["DesignCapacity"] as? Int ?? 0
+        // NominalChargeCapacity replaces AppleRawMaxCapacity, which macOS 27 no longer publishes.
+        batteryCapacity = data["NominalChargeCapacity"] as? Int ?? 0
+        health = designCapacity > 0 ? Double(batteryCapacity) / Double(designCapacity) * 100 : 0
+        cycleCount = battery.int("CycleCount") ?? 0
+        batteryPercent = battery.int("CurrentCapacity") ?? 0
+        serialNumber = battery.string("Serial") ?? "--"
+        let batteryTemperature = getBatteryTemperature()
+        temperature = batteryTemperature > -999 ? Double(batteryTemperature) : 0
+    }
+}
 
-                await parseBatteryInfo(from: output)
-            } catch {
-                print("Error: \(error)")
-            }
-        }
+// Reads properties of the AppleSmartBattery IORegistry entry.
+private struct BatteryRegistry {
+    private let service: io_service_t
+
+    init?() {
+        service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
+        guard service != IO_OBJECT_NULL else { return nil }
     }
-    
-    @MainActor
-    private func parseBatteryInfo(from output: String) {
-        // --- Parse Temperature (ioreg - VirtualTemperature seems more reliable than power_info's) ---
-        if let match = output.range(of: "\"VirtualTemperature\" = ([0-9]+)", options: .regularExpression) {
-            let valueStr = String(output[match]).components(separatedBy: "=").last?.trimmingCharacters(in: .whitespaces) ?? "0"
-            let temperatureValue = Int(valueStr.trimmingCharacters(in: CharacterSet(charactersIn: "\" "))) ?? 0
-            temperature = Double(temperatureValue) / 100.0
-        }
-        
-        // --- Parse Serial Number (ioreg) ---
-        if let match = output.range(of: "\"Serial\" = \"([^\"]+)\"", options: .regularExpression) {
-            let fullMatch = String(output[match])
-            let pattern = "\"Serial\" = \"([^\"]+)\""
-            if let regex = try? NSRegularExpression(pattern: pattern),
-               let nsMatch = regex.firstMatch(in: fullMatch, range: NSRange(fullMatch.startIndex..., in: fullMatch)),
-               nsMatch.numberOfRanges > 1,
-               let valueRange = Range(nsMatch.range(at: 1), in: fullMatch) {
-                serialNumber = String(fullMatch[valueRange])
-            }
-        }
-        
-        // --- Parse Current Charge Percentage (ioreg) ---
-        if let match = output.range(of: "\"CurrentCapacity\" = ([0-9]+)", options: .regularExpression) {
-            let valueStr = String(output[match]).components(separatedBy: "=").last?.trimmingCharacters(in: .whitespaces) ?? "0"
-            batteryPercent = Int(valueStr.trimmingCharacters(in: CharacterSet(charactersIn: "\" "))) ?? 0
-        }
-        
-        // --- Parse Design Capacity (ioreg) ---
-        if let match = output.range(of: "\"DesignCapacity\" = ([0-9]+)", options: .regularExpression) {
-            let valueStr = String(output[match]).components(separatedBy: "=").last?.trimmingCharacters(in: .whitespaces) ?? "0"
-            designCapacity = Int(valueStr.trimmingCharacters(in: CharacterSet(charactersIn: "\" "))) ?? 0
-        }
-        
-        // --- Parse Current Max Capacity & Calculate Health (ioreg) ---
-        if let match = output.range(of: "\"AppleRawMaxCapacity\" = ([0-9]+)", options: .regularExpression) {
-            let valueStr = String(output[match]).components(separatedBy: "=").last?.trimmingCharacters(in: .whitespaces) ?? "0"
-            batteryCapacity = Int(valueStr.trimmingCharacters(in: CharacterSet(charactersIn: "\" "))) ?? 0
-            if designCapacity > 0 {
-                health = (Double(batteryCapacity) / Double(designCapacity)) * 100
-            }
-        }
-        
-        // --- Parse Cycle Count (ioreg) ---
-        if let match = output.range(of: "\"CycleCount\" = ([0-9]+)", options: .regularExpression) {
-            let valueStr = String(output[match]).components(separatedBy: "=").last?.trimmingCharacters(in: .whitespaces) ?? "0"
-            cycleCount = Int(valueStr.trimmingCharacters(in: CharacterSet(charactersIn: "\" "))) ?? 0
-        }
-        
+
+    func release() {
+        IOObjectRelease(service)
     }
+
+    private func value(_ key: String) -> Any? {
+        IORegistryEntryCreateCFProperty(service, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
+    }
+
+    func int(_ key: String) -> Int? { value(key) as? Int }
+    func string(_ key: String) -> String? { value(key) as? String }
+    func dictionary(_ key: String) -> [String: Any] { value(key) as? [String: Any] ?? [:] }
 }

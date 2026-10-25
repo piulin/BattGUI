@@ -23,16 +23,14 @@
 //
 
 import SwiftUI
+import SwiftUI
 import AppKit
 
 struct ContentView: View {
     // State for battery info and UI controls
     @StateObject private var batteryManager = BatteryInfoManager()
     @State private var timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-    @State private var num: Float = 70
-    @State private var iconwidth: CGFloat = 15
-    @State private var debounceTask: Task<Void, Never>?
-    private let socketPath = "/var/run/batt.sock" // Define socket path constant
+    @StateObject private var chargeController = ChargeController()
     @EnvironmentObject private var popoverState: PopoverState
 
     private func quitApp() {
@@ -40,275 +38,221 @@ struct ContentView: View {
     }
 
     var body: some View {
-        // Restore original VStack structure
-        VStack(alignment: .leading, spacing: 0, content: {
-            VStack(alignment: .center, spacing: 0) {
-                HStack(alignment: .center, spacing: 0, content: {
-                    HStack(spacing: 0) {
-                        // Localized Text and flexible frame
-                        Text(LocalizedStringKey("limit.label")).font(.system(size: 13)).bold()
-                        Text(String(format: "%.0f", num)).font(.system(size: 13)).frame(width: 17, alignment: .trailing)
-                        Text("%").font(.system(size: 13))
-                    }.frame(minWidth: 70, idealWidth: 90, maxWidth: .infinity, minHeight: 30).background( // Use minWidth
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(.ultraThickMaterial) // Changed to transparent
-                    ).padding(EdgeInsets(top: 10, leading: 10, bottom: 0, trailing: 0))
-                    
-                    Spacer()
-                    
-//                    Button(action: {}) {
-//                        HStack {
-//                            // Localized Text and flexible frame
-//                            Text(LocalizedStringKey("enable.power.button")).font(.system(size: 13)).bold()
-//                        }.frame(minWidth: 70, idealWidth: 90, maxWidth: .infinity, minHeight: 30).background( // Use minWidth
-//                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-//                                .fill(.ultraThickMaterial) // Changed to transparent
-//                        )
-//                    }.padding(EdgeInsets(top: 10, leading: 0, bottom: 0, trailing: 0)).buttonStyle(PlainButtonStyle())
-//                    
-//                    Spacer()
-                    
-                    Button(action: { quitApp() }) {
-                        HStack {
-                            Image(systemName: "xmark.circle")
-                                .imageScale(.large)
-                                .foregroundColor(.black)
-                        }.frame(width: 30, height: 30).background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(.ultraThickMaterial) // Changed to transparent
-                        )
-                    }.padding(EdgeInsets(top: 10, leading: 0, bottom: 0, trailing: 10)).buttonStyle(PlainButtonStyle())
-                })
-                
-                Slider(value: $num, in: 10...99, onEditingChanged: {editing in
-                    if !editing {
-                        debounceTask?.cancel()
-                        // Use Task for background execution, no need for .detached unless specific priority is crucial
-                        debounceTask = Task {
-                            // Define error pointer for C function
-                            var nsError: NSError?
-                            
-                            // Call the C function with the defined path as a C string
-                            let result = sendCommandToUnixSocket(Int(num), socketPath.cString(using: .utf8)!, &nsError)
-                            
-                            // Switch back to the main thread to handle UI or print logs
-                            await MainActor.run {
-                                if let error = nsError {
-                                    // An error occurred during the socket operation
-                                    // Use localized string with formatting
-                                    print(String(format: NSLocalizedString("socket.command.failed.error", comment: "Error message when socket command fails"), error.localizedDescription))
-                                    // TODO: Add UI feedback for the error (e.g., show an alert)
-                                } else if let response = result {
-                                    // Successfully sent command and got response
-                                    print("Socket command successful. Response: \(response)")
-                                    // Optional: Parse response using extractSet(from: response) if needed
-                                    if let limitSet = extractSet(from: response) {
-                                        print("Successfully set limit to \(limitSet)%")
-                                        // TODO: Add UI feedback for success if desired
-                                    } else {
-                                        // Use localized string if available, otherwise generic message
-                                        // Consider adding a specific localized string for this case
-                                        print(NSLocalizedString("limit.set.confirmation.parse.error", comment: "Could not parse confirmation from daemon response: \(response)"))
-                                        // TODO: Add UI feedback for parsing failure if desired
-                                    }
-                                } else {
-                                    // Should not happen if ObjC code is correct and no error is set, but handle defensively
-                                    print(NSLocalizedString("socket.command.unknown.error", comment: "Unknown error during socket command"))
-                                    // TODO: Add UI feedback for this unexpected case
-                                }
-                            }
-                        }
-                    }
-                })
-                .padding(EdgeInsets(top: 10, leading: 10, bottom: 5, trailing: 10)) // Added bottom padding
+        VStack(spacing: 10) {
+            header
 
-                // --- Power Flow Visualization ---
-                PowerFlowView(
-                    inputPower: batteryManager.inputwatt,
-                    batteryPower: batteryManager.batteryPower,
-                    systemLoad: batteryManager.loadwatt
-                )
-                .frame(minWidth: 300)
-                .padding(EdgeInsets(top: 5, leading: 10, bottom: 0, trailing: 10))
-                .animation(.easeIn, value: batteryManager.batteryPower)
-                // --- End Power Flow Visualization ---
+            if let error = chargeController.errorMessage {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
             }
-            
-            Divider().padding(EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10))
-            
-            VStack(alignment: .leading, content: {
-                HStack(alignment: .center, content: {
-                    Image(systemName: Icons.designcapacity).frame(width: iconwidth, alignment: .center)
-                    Text(LocalizedStringKey("design.capacity.label")).font(.system(size: 13)).bold() // Localized
-                    Spacer()
-                    Text("\(batteryManager.designCapacity) mAh").font(.system(size: 13))
-                    Text("100%").font(.system(size: 13)).frame(width: 40, alignment: .trailing)
-                }).padding(EdgeInsets(top: 0, leading: 15, bottom: 1, trailing: 15))
-                HStack(content: {
-                    Image(systemName: Icons.serial).frame(width: iconwidth, alignment: .center)
-                    Text(LocalizedStringKey("serial.number.label")).font(.system(size: 13)).bold() // Localized
-                    Spacer()
-                    Text(batteryManager.serialNumber).font(.system(size: 13)).frame(alignment: .trailing)
-                }).padding(EdgeInsets(top: 0, leading: 15, bottom: 0, trailing: 15))
-            })
-            
-            Divider().padding(EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10))
-            
-            VStack(alignment: .leading, content: {
-                HStack(alignment: .center, content: {
-                    Image(systemName: Icons.maxcapacity).frame(width: iconwidth, alignment: .center)
-                    Text(LocalizedStringKey("max.capacity.label")).font(.system(size: 13)).bold() // Localized
-                    Spacer()
-                    Text("\(batteryManager.batteryCapacity) mAh").font(.system(size: 13))
-                    Text(String(format: "%.0f%%", batteryManager.health)).font(.system(size: 13)).frame(width: 40, alignment: .trailing)
-                }).padding(EdgeInsets(top: 0, leading: 15, bottom: 1, trailing: 15))
-                HStack(alignment: .center, content: {
-                    Image(systemName: Icons.cyclecount).frame(width: iconwidth, alignment: .center)
-                    Text(LocalizedStringKey("cycle.count.label")).font(.system(size: 13)).bold() // Localized
-                    Spacer()
-                    Text("\(batteryManager.cycleCount)").font(.system(size: 13)).frame(width: 40, alignment: .trailing)
-                }).padding(EdgeInsets(top: 0, leading: 15, bottom: 1, trailing: 15))
-                HStack(content: {
-                    Image(systemName: Icons.flame).frame(width: iconwidth, alignment: .center)
-                    Text(LocalizedStringKey("battery.temperature.label")).font(.system(size: 13)).bold() // Localized
-                    Spacer()
-                    Text(String(format: "%.2f", batteryManager.temperature) + " °C").font(.system(size: 13)).frame(alignment: .trailing)
-                }).padding(EdgeInsets(top: 0, leading: 15, bottom: 1, trailing: 15))
-                HStack(content: {
-                    Image(systemName: Icons.levelcapacity).frame(width: iconwidth, alignment: .center)
-                    Text(LocalizedStringKey("battery.level.label")).font(.system(size: 13)).bold() // Localized
-                    Spacer()
-                    Text(String(format: "%d%%", batteryManager.batteryPercent)).font(.system(size: 13)).frame(alignment: .trailing)
-                }).padding(EdgeInsets(top: 0, leading: 15, bottom: 0, trailing: 15))
-            })
-            
-            Divider().padding(EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10))
-            
-            VStack(alignment: .leading, content: {
-                HStack(content: {
-                    Image(systemName: Icons.charge).frame(width: iconwidth, alignment: .center)
-                    Text(LocalizedStringKey("charging.status.label")).font(.system(size: 13)).bold() // Localized
-                    Spacer()
-                    // Localized Yes/No
-                    Text(batteryManager.isCharging ? LocalizedStringKey("yes") : LocalizedStringKey("no")).font(.system(size: 13)).frame(alignment: .trailing)
-                }).padding(EdgeInsets(top: 0, leading: 15, bottom: 1, trailing: 15))
-                HStack(content: {
-                    Image(systemName: Icons.iconLight).frame(width: iconwidth, alignment: .center)
-                    Text(LocalizedStringKey("battery.power.label")).font(.system(size: 13)).bold() // Localized
-                    Spacer()
-                    Text(String(format: "%.2f", batteryManager.batteryPower < 0 ? batteryManager.batteryPower * -1 : batteryManager.batteryPower) + " W").font(.system(size: 13)).frame(alignment: .trailing)
-                }).padding(EdgeInsets(top: 0, leading: 15, bottom: 1, trailing: 15))
-                HStack(content: {
-                    Image(systemName: Icons.normLight).frame(width: iconwidth, alignment: .center)
-                    Text(LocalizedStringKey("battery.amperage.label")).font(.system(size: 13)).bold() // Localized
-                    Spacer()
-                    Text(String(format: "%.3f", batteryManager.batteryAmperage < 0 ? batteryManager.batteryAmperage * -1 : batteryManager.batteryAmperage) + " A").font(.system(size: 13)).frame(alignment: .trailing)
-                }).padding(EdgeInsets(top: 0, leading: 15, bottom: 1, trailing: 15))
-                HStack(content: {
-                    Image(systemName: Icons.slash).frame(width: iconwidth, alignment: .center)
-                    Text(LocalizedStringKey("battery.voltage.label")).font(.system(size: 13)).bold() // Localized
-                    Spacer()
-                    Text(String(format: "%.2f", batteryManager.batteryVoltage) + " V").font(.system(size: 13)).frame(alignment: .trailing)
-                }).padding(EdgeInsets(top: 0, leading: 15, bottom: 0, trailing: 15))
-            })
-            
-            Divider().padding(EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10))
-            
-            VStack(alignment: .leading, content: {
-                HStack(content: {
-                    Image(systemName: Icons.iconLight).frame(width: iconwidth, alignment: .center)
-                    Text(LocalizedStringKey("system.load.label")).font(.system(size: 13)).bold() // Localized
-                    Spacer()
-                    Text(String(format: "%.2f", batteryManager.loadwatt) + " W").font(.system(size: 13)).frame(alignment: .trailing)
-                }).padding(EdgeInsets(top: 0, leading: 15, bottom: 1, trailing: 15))
-                HStack(content: {
-                    Image(systemName: Icons.iconLight).frame(width: iconwidth, alignment: .center)
-                    Text(LocalizedStringKey("adapter.input.power.label")).font(.system(size: 13)).bold() // Localized
-                    Spacer()
-                    Text(String(format: "%.2f", batteryManager.inputwatt) + " W").font(.system(size: 13)).frame(alignment: .trailing)
-                }).padding(EdgeInsets(top: 0, leading: 15, bottom: 1, trailing: 15))
-                HStack(content: {
-                    Image(systemName: Icons.normLight).frame(width: iconwidth, alignment: .center)
-                    Text(LocalizedStringKey("adapter.input.amperage.label")).font(.system(size: 13)).bold() // Localized
-                    Spacer()
-                    Text(String(format: "%.3f", batteryManager.amperage) + " A").font(.system(size: 13)).frame(alignment: .trailing)
-                }).padding(EdgeInsets(top: 0, leading: 15, bottom: 1, trailing: 15))
-                HStack(content: {
-                    Image(systemName: Icons.slash).frame(width: iconwidth, alignment: .center)
-                    Text(LocalizedStringKey("adapter.input.voltage.label")).font(.system(size: 13)).bold() // Localized
-                    Spacer()
-                    Text(String(format: "%.2f", batteryManager.voltage) + " V").font(.system(size: 13)).frame(alignment: .trailing)
-                }).padding(EdgeInsets(top: 0, leading: 15, bottom: 10, trailing: 15))
-            })
-        })
-        // Restore .onReceive here
+
+            // --- Power Flow Visualization ---
+            PowerFlowView(
+                inputPower: batteryManager.inputwatt,
+                batteryPower: batteryManager.batteryPower,
+                systemLoad: batteryManager.loadwatt
+            )
+            .frame(minWidth: 300)
+            .animation(.easeIn, value: batteryManager.batteryPower)
+
+            InfoSection {
+                InfoRow(icon: Icons.designCapacity, tint: .green, label: "design.capacity.label",
+                        value: "\(batteryManager.designCapacity) mAh", detail: "100%")
+                InfoRow(icon: Icons.serial, tint: .gray, label: "serial.number.label",
+                        value: batteryManager.serialNumber)
+            }
+
+            InfoSection {
+                InfoRow(icon: Icons.maxCapacity, tint: .pink, label: "max.capacity.label",
+                        value: "\(batteryManager.batteryCapacity) mAh", detail: String(format: "%.0f%%", batteryManager.health))
+                InfoRow(icon: Icons.cycleCount, tint: .blue, label: "cycle.count.label",
+                        value: "\(batteryManager.cycleCount)")
+                InfoRow(icon: Icons.temperature, tint: .orange, label: "battery.temperature.label",
+                        value: String(format: "%.2f °C", batteryManager.temperature))
+                InfoRow(icon: Icons.level(batteryManager.batteryPercent), tint: .green, label: "battery.level.label",
+                        value: String(format: "%d%%", batteryManager.batteryPercent))
+            }
+
+            InfoSection {
+                InfoRow(icon: Icons.charging, tint: .yellow, label: "charging.status.label",
+                        value: NSLocalizedString(batteryManager.isCharging ? "yes" : "no", comment: ""))
+                InfoRow(icon: Icons.power, tint: .yellow, label: "battery.power.label",
+                        value: String(format: "%.2f W", abs(batteryManager.batteryPower)))
+                InfoRow(icon: Icons.current, tint: .teal, label: "battery.amperage.label",
+                        value: String(format: "%.3f A", abs(batteryManager.batteryAmperage)))
+                InfoRow(icon: Icons.voltage, tint: .purple, label: "battery.voltage.label",
+                        value: String(format: "%.2f V", batteryManager.batteryVoltage))
+            }
+
+            InfoSection {
+                InfoRow(icon: Icons.systemLoad, tint: .indigo, label: "system.load.label",
+                        value: String(format: "%.2f W", batteryManager.loadwatt))
+                InfoRow(icon: Icons.adapter, tint: .yellow, label: "adapter.input.power.label",
+                        value: String(format: "%.2f W", batteryManager.inputwatt))
+                InfoRow(icon: Icons.current, tint: .teal, label: "adapter.input.amperage.label",
+                        value: String(format: "%.3f A", batteryManager.amperage))
+                InfoRow(icon: Icons.voltage, tint: .purple, label: "adapter.input.voltage.label",
+                        value: String(format: "%.2f V", batteryManager.voltage))
+            }
+        }
+        .padding(10)
         .onReceive(timer) { _ in
             if popoverState.isVisible {
                 batteryManager.updateBatteryInfo()
+                chargeController.refreshIfStale()
+            }
+        }
+        .onChange(of: popoverState.isVisible) { _, isVisible in
+            if isVisible {
+                chargeController.refresh()
             }
         }
     }
 
-    }
+    // Charging toggle and quit button
+    private var header: some View {
+        HStack(spacing: 8) {
+            // Pause / allow battery charging while staying on adapter power
+            HStack(spacing: 8) {
+                Image(systemName: chargeController.isPaused ? Icons.chargingPaused : Icons.chargingAllowed)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(chargeController.isPaused ? Color.secondary : Color.yellow)
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: 18)
+                Text(LocalizedStringKey(chargeController.isPaused ? "charging.paused.label" : "charging.allowed.label"))
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer(minLength: 8)
+                if chargeController.isBusy {
+                    ProgressView().controlSize(.small)
+                }
+                Toggle("", isOn: Binding(
+                    get: { !chargeController.isPaused },
+                    set: { chargeController.setChargingAllowed($0) }
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.small)
+                .disabled(chargeController.isBusy)
+            }
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity, minHeight: 36)
+            .glassSurface(in: Capsule())
+            .help(chargeController.holdLimit.map { String(format: NSLocalizedString("charging.hold.help", comment: "Tooltip while charging is paused"), $0) } ?? "")
 
-func extractGet(from input: String) -> Int? {
-    let pattern = #"Upper limit:\s+(\d+)%"#
-    
-    guard let regex = try? NSRegularExpression(pattern: pattern) else {
-        return nil
+            QuitButton(action: quitApp)
+        }
     }
-    
-    let nsRange = NSRange(input.startIndex..<input.endIndex, in: input)
-    
-    guard let match = regex.firstMatch(in: input, options: [], range: nsRange),
-          let valueRange = Range(match.range(at: 1), in: input) else {
-        return nil
-    }
-    
-    return Int(input[valueRange])
 }
 
-func extractSet(from input: String) -> Int? {
-    let pattern = #"charging limit to\s+(\d+)%"#
-    
-    // 创建正则表达式，因为确定模式有效，所以使用 try!
-    let regex = try! NSRegularExpression(pattern: pattern)
-    
-    let nsRange = NSRange(input.startIndex..<input.endIndex, in: input)
-    
-    // 使用可选绑定而不是强制解包
-    if let match = regex.firstMatch(in: input, options: [], range: nsRange),
-       let valueRange = Range(match.range(at: 1), in: input),
-       let value = Int(input[valueRange]) {
-        return value
+// A group of related rows on a subtle rounded background.
+private struct InfoSection<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(spacing: 6) {
+            content
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
-    
-    // 如果没有匹配或无法转换为整数，返回 nil
-    return nil
+}
+
+// One labelled value with a tinted symbol.
+private struct InfoRow: View {
+    let icon: String
+    let tint: Color
+    let label: LocalizedStringKey
+    let value: String
+    var detail: String? = nil
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(tint)
+                .frame(width: 18)
+            Text(label)
+            Spacer(minLength: 12)
+            Text(value)
+                .foregroundStyle(.secondary)
+            if let detail {
+                Text(detail)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 40, alignment: .trailing)
+            }
+        }
+        .font(.system(size: 13))
+        .monospacedDigit()
+    }
+}
+
+private struct QuitButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        if #available(macOS 26.0, *) {
+            Button(action: action) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+        } else {
+            Button(action: action) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 36, height: 36)
+                    .background(.ultraThickMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+extension View {
+    // Liquid Glass on macOS 26 and later, a material on earlier versions.
+    @ViewBuilder
+    func glassSurface<S: Shape>(in shape: S) -> some View {
+        if #available(macOS 26.0, *) {
+            glassEffect(.regular, in: shape)
+        } else {
+            background(.ultraThickMaterial, in: shape)
+        }
+    }
 }
 
 extension ContentView {
-    // 定义图标常量
+    // SF Symbols used by the rows
     struct Icons {
-        static let normLight = "minus.plus.batteryblock"
-        static let normDark = "minus.plus.batteryblock.fill"
-        static let stopLight = "minus.plus.batteryblock.slash"
-        static let stopDark = "minus.plus.batteryblock.slash.fill"
-        static let excepLight = "minus.plus.batteryblock.exclamationmark"
-        static let excepDark = "minus.plus.batteryblock.exclamationmark.fill"
-        static let iconLight = "bolt.batteryblock"
-        static let iconDark = "bolt.batteryblock.fill"
-        static let slash = "minus.plus.and.fluid.batteryblock"
-        static let serial = "note.text"
-        static let flame = "flame"
-        static let designcapacity = "battery.100percent"
-        static let levelcapacity = "battery.50percent"
-        static let maxcapacity = "percent"
-        static let cyclecount = "clock.arrow.trianglehead.counterclockwise.rotate.90"
-        static let charge = "powerplug"
+        static let chargingAllowed = "bolt.fill"
+        static let chargingPaused = "bolt.slash.fill"
+        static let designCapacity = "battery.100percent"
+        static let serial = "number"
+        static let maxCapacity = "heart.fill"
+        static let cycleCount = "arrow.triangle.2.circlepath"
+        static let temperature = "thermometer.medium"
+        static let charging = "battery.100percent.bolt"
+        static let power = "bolt.fill"
+        static let current = "arrow.up.arrow.down"
+        static let voltage = "gauge.medium"
+        static let systemLoad = "laptopcomputer"
+        static let adapter = "powerplug.portrait.fill"
+
+        static func level(_ percent: Int) -> String {
+            switch percent {
+            case ..<13: return "battery.0percent"
+            case ..<38: return "battery.25percent"
+            case ..<63: return "battery.50percent"
+            case ..<88: return "battery.75percent"
+            default: return "battery.100percent"
+            }
+        }
     }
 }
-
-//#Preview {
-//    ContentView()
-//}
